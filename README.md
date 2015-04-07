@@ -1,2 +1,2 @@
 # networking
-Random networking code in Python
+Random network code in Python
