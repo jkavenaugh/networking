@@ -22,7 +22,8 @@ class SocketOSPF:
         self.conn.setsockopt(IPPROTO_IP, IP_ADD_MEMBERSHIP, mreq)
 
     def get_data(self):
-        return self.conn.recvfrom(1500)
+        data = self.conn.recvfrom(1500)
+        return data[0]
 
 class IPv4:
 
@@ -42,8 +43,7 @@ class IPv4:
         self.ver_ihl = (self.ver << 4) + self.ihl
 
     def unpack_header(self, data):
-        packet = data[0]
-        ip_header = packet[0:20]
+        ip_header = data[0:20]
         self.ip_header = unpack('!BBHHHBBH4s4s', ip_header)
         self.ver_ihl = self.ip_header[0]
         self.ver = (self.ver_ihl >> 4)
@@ -57,7 +57,58 @@ class IPv4:
         self.check = self.ip_header[7]
         self.saddr = inet_ntoa(self.ip_header[8])
         self.daddr = inet_ntoa(self.ip_header[9])
-        return
+
+class HeaderOSPF:
+
+    def __init__(self):
+
+        self.ver = 2
+        self.mtype = 0
+        self.length = 0
+        self.router = 0
+        self.area = 0
+        self.check = 0
+        self.auth_type = 0
+        self.auth = 0
+
+    def unpack_header(self, data):
+        ospf_header = data[20:44]
+        self.ospf_header = unpack('!BBH4s4sHH8s', ospf_header)
+        self.ver = self.ospf_header[0]
+        self.mtype = self.ospf_header[1]
+        self.length = self.ospf_header[2]
+        self.router = inet_ntoa(self.ospf_header[3])
+        self.area = inet_ntoa(self.ospf_header[4])
+        self.check = self.ospf_header[5]
+        self.auth_type = self.ospf_header[6]
+        auth = unpack('!BBBBBBBB', self.ospf_header[7])
+        self.auth = ''.join(map(str,auth))
+
+class HelloOSPF:
+
+    def __init__(self):
+        self.net_mask = 0
+        self.interval = 0
+        self.options = 0
+        self.priority = 0
+        self.dead_int = 0
+        self.des_router = 0
+        self.back_router = 0
+        self.neighbor = 0
+        self.length = 0
+
+    def unpack_hello(self, data, length):
+        hello_header = data[44:64]
+        neighbors = data[60:length]
+        self.hello_header = unpack('!4sHBB4s4s4s', hello_header)
+        self.net_mask = inet_ntoa(self.hello_header[0])
+        self.interval = self.hello_header[1]
+        self.options = self.hello_header[2]
+        self.priority = self.hello_header[3]
+        dead = unpack('!BBBB', self.hello_header[4])
+        self.dead_int = int(''.join(map(str,dead)))
+        self.des_router = inet_ntoa(self.hello_header[5])
+        self.back_router = inet_ntoa(self.hello_header[6])
 
 def main():
 
@@ -67,11 +118,19 @@ def main():
     conn.connect()
     
     ip_header = IPv4()
+    ospf_header = HeaderOSPF()
 
     while True:
         data = conn.get_data()
-        ip_header.unpack_header(data)
-        print("Source: ",ip_header.saddr, " Dest: ", ip_header.daddr)
-
+        if data:
+            ip_header.unpack_header(data)
+            ospf_header.unpack_header(data)
+            if ospf_header.mtype == 1:
+                ospf_hello = HelloOSPF()
+                ospf_hello.unpack_hello(data, ospf_header.length)
+                print("OSPF Hello from Router: ", ip_header.saddr,"\n")
+                print("Router ID: ", ospf_header.router, " Area: ", ospf_header.area, " Designated Router: ", ospf_hello.des_router)
+                print("Interval: ", ospf_hello.interval, " Dead Interval: ", ospf_hello.dead_int)
+            
 if __name__ == '__main__':
     main()
