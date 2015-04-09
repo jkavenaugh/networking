@@ -6,7 +6,7 @@
 
 """
 
-import asyncore
+from threading import Thread
 from socket import socket, AF_INET, SOCK_RAW, SOL_SOCKET, SO_REUSEADDR
 from socket import inet_aton, inet_ntoa, INADDR_ANY, IPPROTO_IP, IP_ADD_MEMBERSHIP
 from struct import pack, unpack
@@ -15,17 +15,18 @@ mcast_group = '224.0.0.5'
 local_ip = '172.16.50.13'
 
 
-class OSPFSocket(asyncore.dispatcher):
+class OSPFSocket:
     """A raw socket, protocol 89 and multicast membership"""
 
-    def __init__(self, sock, mcast_group, local_ip, ospf):
+    def __init__(self, mcast_group, local_ip, ospf):
         """Sets the multicast group and ip address to bind too"""
-        asyncore.dispatcher.__init__(self,sock)
+        
         self.mcast_group = mcast_group
         self.local_ip = local_ip
-        self.socket.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
+        self.sock = socket(AF_INET, SOCK_RAW, 89)
+        self.sock.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
         mreq = inet_aton(self.mcast_group) + inet_aton(self.local_ip)
-        self.socket.setsockopt(IPPROTO_IP, IP_ADD_MEMBERSHIP, mreq)
+        self.sock.setsockopt(IPPROTO_IP, IP_ADD_MEMBERSHIP, mreq)
         self.ospf = ospf
 
     def handle_close(self):
@@ -33,8 +34,9 @@ class OSPFSocket(asyncore.dispatcher):
 
     def handle_read(self):
         """Returns data rercieved on the socket"""
-        data = self.recv(1500)
-        self.ospf.recieve_data(data)
+        while True:
+            data = (self.sock.recvfrom(1500))
+            self.ospf.recieve_data(data[0])
 
 class IPv4:
     """A class to handle IPv4"""
@@ -166,11 +168,15 @@ class Hello:
             neighbor = inet_ntoa(neighbor_packed[pos:pos+4])
             self.neighbors.append(neighbor)
 
+def print_hello():
+    while True:
+        print("hello")
+
 def main():
     ospf = OSPF()
-    s = socket(AF_INET, SOCK_RAW, 89)
-    conn = OSPFSocket(s, mcast_group, local_ip, ospf)
-    asyncore.loop()
-    
+    conn = OSPFSocket(mcast_group, local_ip, ospf)
+    t = Thread(target=conn.handle_read)
+    t.start()
+
 if __name__ == '__main__':
     main()
