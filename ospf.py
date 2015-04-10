@@ -62,7 +62,7 @@ class IPv4:
         """Takes the IPv4 header from a socket and unpacks the binary into the proper
            IPv4 headers.
         """
-
+        
         ip_header = data[0:20]
         self.ip_header = unpack('!BBHHHBBH4s4s', ip_header)
         self.ver_ihl = self.ip_header[0]
@@ -133,12 +133,23 @@ class OSPF:
                 ospf.check = 0
                 ospf.auth_type = 0
                 ospf.auth = pack('B', 0)
-        
+                check = pack('!BBH4s4sHH', ospf.ver, ospf.mtype, ospf.length, ospf.router, ospf.area, ospf.check, ospf.auth_type)
+                ospf.check = checksum(check + hello_message)
                 ospf_header = ospf.pack_header()
-        
+
                 packet = ospf_header + hello_message
                 self.conn.send_data(packet, mcast_group)
                 time.sleep(10)
+
+def checksum(msg):
+    s = 0
+    for x in range(0, len(msg), 2):
+        s += (msg[x+1]*256 + msg[x])
+
+    s = (s >> 16) + (s & 0xffff)
+    s += (s >> 16)
+    s = ~s & 0xffff
+    return s
 
 class Header:
     """Handles the OSPF header"""
@@ -171,10 +182,12 @@ class Header:
         self.auth_type = self.ospf_header[6]
         auth = unpack('!BBBBBBBB', self.ospf_header[7])
         self.auth = ''.join(map(str,auth))
-    
+     
     def pack_header(self):
-        ospf_header = pack('!BBH4s4sHH8s', self.ver, self.mtype, self.length, self.router, self.area, self.check, self.auth_type, self.auth)
-        return ospf_header
+        head = pack('!BBH4s4s', self.ver, self.mtype, self.length, self.router, self.area) 
+        check = pack('H', self.check) 
+        auth = pack('!H8s', self.auth_type, self.auth)
+        return head + check + auth
 
 class Hello:
     """Handles the OSPF Hello message"""
