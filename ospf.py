@@ -10,6 +10,7 @@ from threading import Thread
 from socket import socket, AF_INET, SOCK_RAW, SOL_SOCKET, SO_REUSEADDR
 from socket import inet_aton, inet_ntoa, INADDR_ANY, IPPROTO_IP, IP_ADD_MEMBERSHIP
 from struct import pack, unpack
+import time
 
 mcast_group = '224.0.0.5'
 local_ip = '172.16.50.13'
@@ -29,14 +30,14 @@ class OSPFSocket:
         self.sock.setsockopt(IPPROTO_IP, IP_ADD_MEMBERSHIP, mreq)
         self.ospf = ospf
 
-    def handle_close(self):
-        self.close()
-
-    def handle_read(self):
+    def receive_data(self):
         """Returns data rercieved on the socket"""
         while True:
             data = (self.sock.recvfrom(1500))
-            self.ospf.recieve_data(data[0])
+            self.ospf.receive_data(data[0])
+    def send_data(self, data, dest_ip):
+
+        self.sock.sendto(data, (dest_ip,0))
 
 class IPv4:
     """A class to handle IPv4"""
@@ -50,7 +51,7 @@ class IPv4:
         self.tl = 0
         self.ident = 0
         self.frag = 0
-        self.ttl = 64
+        self.ttl = 225
         self.proto = 89
         self.check = 0
         self.saddr = 0
@@ -61,7 +62,7 @@ class IPv4:
         """Takes the IPv4 header from a socket and unpacks the binary into the proper
            IPv4 headers.
         """
-        
+
         ip_header = data[0:20]
         self.ip_header = unpack('!BBHHHBBH4s4s', ip_header)
         self.ver_ihl = self.ip_header[0]
@@ -77,24 +78,67 @@ class IPv4:
         self.saddr = inet_ntoa(self.ip_header[8])
         self.daddr = inet_ntoa(self.ip_header[9])
 
-
 class OSPF:
     def __init__(self):
-        self.ip_header = IPv4()
-        self.ospf_header = Header()
-        self.ospf_hello = Hello()
+        self.area = '0.0.0.0'
+        self.router = '4.4.4.4'
+        self.neighbors = []
 
-    def recieve_data(self, data):
-        self.ip_header.unpack_header(data)
-        self.ospf_header.unpack_header(data)
+        self.conn = OSPFSocket(mcast_group, local_ip, self)
+        t = Thread(target=self.conn.receive_data)
+        h = Thread(target=self.send_hello)
+        h.start()
+        t.start()
+
+
+
+
+    def receive_data(self, data):
+        ip_header = IPv4()
+        ospf_header = Header()
+        ospf_hello = Hello()
+
+        ip_header.unpack_header(data)
+        if ip_header.saddr == local_ip: 
+            return
+
+        ospf_header.unpack_header(data)
                
-        if self.ospf_header.mtype == 1:
-           self.ospf_hello.unpack_hello(data, self.ospf_header.length)
-           print("OSPF Hello from Router: ", self.ip_header.saddr,"\n")
-           print("Router ID: ", self.ospf_header.router, " Area: ", self.ospf_header.area, " Designated Router: ", self.ospf_hello.des_router)
-           print("Interval: ", self.ospf_hello.interval, " Dead Interval: ", self.ospf_hello.dead_int)
-           print("Neighbors: ", self.ospf_hello.neighbors)
+        if ospf_header.mtype == 1:
+           ospf_hello.unpack_hello(data, ospf_header.length)
 
+    def send_hello(self):
+            
+            while True:
+                    
+                hello = Hello()
+                ospf = Header()
+        
+                hello.net_mask = inet_aton('255.255.255.0')
+                hello.interval = 10
+                hello.options = 0
+                hello.priority = 0
+                hello.dead_int = 40
+                hello.des_router = inet_aton('0.0.0.0')
+                hello.back_router = inet_aton('0.0.0.0')
+                hello.neighbors = 0
+        
+                hello_message = hello.pack_hello()
+        
+                ospf.ver = 2
+                ospf.mtype = 1
+                ospf.length = 44
+                ospf.router = inet_aton(self.router)
+                ospf.area = inet_aton(self.area)
+                ospf.check = 0
+                ospf.auth_type = 0
+                ospf.auth = pack('B', 0)
+        
+                ospf_header = ospf.pack_header()
+        
+                packet = ospf_header + hello_message
+                self.conn.send_data(packet, mcast_group)
+                time.sleep(10)
 
 class Header:
     """Handles the OSPF header"""
@@ -127,6 +171,10 @@ class Header:
         self.auth_type = self.ospf_header[6]
         auth = unpack('!BBBBBBBB', self.ospf_header[7])
         self.auth = ''.join(map(str,auth))
+    
+    def pack_header(self):
+        ospf_header = pack('!BBH4s4sHH8s', self.ver, self.mtype, self.length, self.router, self.area, self.check, self.auth_type, self.auth)
+        return ospf_header
 
 class Hello:
     """Handles the OSPF Hello message"""
@@ -168,15 +216,14 @@ class Hello:
             neighbor = inet_ntoa(neighbor_packed[pos:pos+4])
             self.neighbors.append(neighbor)
 
-def print_hello():
-    while True:
-        print("hello")
+    def pack_hello(self):
+
+        hello_message = pack('!4sHBBi4s4s', self.net_mask, self.interval, self.options, self.priority, self.dead_int, self.des_router, self.back_router)
+        
+        return hello_message
 
 def main():
-    ospf = OSPF()
-    conn = OSPFSocket(mcast_group, local_ip, ospf)
-    t = Thread(target=conn.handle_read)
-    t.start()
 
+    ospf = OSPF()
 if __name__ == '__main__':
     main()
