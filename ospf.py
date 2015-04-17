@@ -82,6 +82,7 @@ class OSPF:
     def __init__(self):
         self.area = '0.0.0.0'
         self.router = '4.4.4.4'
+        self.ebit = 2
         self.neighbors = []
 
         self.conn = OSPFSocket(mcast_group, local_ip, self)
@@ -106,6 +107,8 @@ class OSPF:
                
         if ospf_header.mtype == 1:
            ospf_hello.unpack_hello(data, ospf_header.length)
+           if ospf_header.router not in self.neighbors:
+               self.neighbors.append(ospf_header.router)
 
     def send_hello(self):
             
@@ -116,18 +119,18 @@ class OSPF:
         
                 hello.net_mask = inet_aton('255.255.255.0')
                 hello.interval = 10
-                hello.options = 0
+                hello.options = self.ebit
                 hello.priority = 0
                 hello.dead_int = 40
                 hello.des_router = inet_aton('0.0.0.0')
                 hello.back_router = inet_aton('0.0.0.0')
-                hello.neighbors = 0
+                hello.neighbors = self.neighbors
         
                 hello_message = hello.pack_hello()
         
                 ospf.ver = 2
                 ospf.mtype = 1
-                ospf.length = 44
+                ospf.length = 24 + len(hello_message)
                 ospf.router = inet_aton(self.router)
                 ospf.area = inet_aton(self.area)
                 ospf.check = 0
@@ -230,10 +233,15 @@ class Hello:
             self.neighbors.append(neighbor)
 
     def pack_hello(self):
-
+        
         hello_message = pack('!4sHBBi4s4s', self.net_mask, self.interval, self.options, self.priority, self.dead_int, self.des_router, self.back_router)
         
-        return hello_message
+        neighbors_packed = b''
+        for neighbor in self.neighbors:
+            neighbors_packed = b''.join([neighbors_packed, inet_aton(neighbor)])
+           
+        hello = hello_message + neighbors_packed
+        return hello
 
 def main():
 
