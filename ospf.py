@@ -124,8 +124,8 @@ class OSPF:
                
         if ospf_header.mtype == 1:
            ospf_hello.unpack(data, self.header.length)
-           if ospf_header.router not in self.header.neighbors:
-               self.header.neighbors.append(ospf_header.router)
+           if ospf_header.router not in self.hello.neighbors:
+               self.hello.neighbors.append(ospf_header.router)
 
     def send_hello(self):
             
@@ -133,12 +133,14 @@ class OSPF:
                     
                 hello = Hello()
                 ospf = Header()
-
+                
+                hello_packed = self.hello.pack()
+                self.header.length = 24 + len(hello_packed)
                 self.header.check = True
-                self.header.checksum = checksum(self.header.pack() + self.hello.pack())
-                hello_message = self.hello.pack()
-                ospf_header = self.header.pack()
-                packet = ospf_header + hello_message
+                header_packed = self.header.pack()
+                self.header.checksum = checksum(header_packed + hello_packed)
+                header_packed = self.header.pack()
+                packet = header_packed + hello_packed
                 self.conn.send_data(packet, mcast_group)
                 time.sleep(10)
 
@@ -167,7 +169,6 @@ class Header:
         self.checksum = 0
         self.auth_type = 0
         self.auth = 0
-        self.neighbors = []
 
     def unpack(self, data):
         """Takes data from a raw socket and unpacks the OSPF header from
@@ -189,15 +190,16 @@ class Header:
     def pack(self):
 
         head = struct.pack('!BBH4s4s', self.ver, self.mtype, self.length, self.router, self.area) 
-        check = struct.pack('H', self.checksum)
         if self.check:
             self.checksum = 0
             auth = struct.pack('!H', self.auth_type)
             self.check = False
         else:
             auth = struct.pack('!H8s', self.auth_type, self.auth)
-
-        return head + check + auth
+      
+        checksum = struct.pack('H', self.checksum)
+       
+        return head + checksum + auth
 
 class Hello:
     """Handles the OSPF Hello message"""
@@ -274,7 +276,7 @@ class Hello:
         neighbors_packed = b''
         for neighbor in self.neighbors:
             neighbors_packed = b''.join([neighbors_packed, inet_aton(neighbor)])
-           
+        
         hello = hello_message + neighbors_packed
         return hello
 
