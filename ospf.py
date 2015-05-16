@@ -1,4 +1,4 @@
-#!/usr/local/bin/python3.5
+#!/usr/bin/python3
 
 """
 
@@ -15,7 +15,10 @@ import os
 import signal
 
 mcast_group = '224.0.0.5'
-local_ip = '172.16.50.13'
+local_ip = '172.16.50.208'
+area_id = '0.0.0.0'
+router_id = '4.4.4.4'
+
 
 class OSPFSocket:
     """A raw socket, protocol 89 and multicast membership"""
@@ -42,6 +45,7 @@ class OSPFSocket:
 
     def close(self):
         socket.close()
+
 
 class IPv4:
     """A class to handle IPv4"""
@@ -82,6 +86,7 @@ class IPv4:
         self.saddr = inet_ntoa(self.ip_header[8])
         self.daddr = inet_ntoa(self.ip_header[9])
 
+
 class OSPF:
     def __init__(self):
 
@@ -99,17 +104,17 @@ class OSPF:
         self.header.ver = 2
         self.header.mtype = 1
         self.header.length = 24 + len(self.hello.pack())
-        self.header.router = inet_aton('4.4.4.4')
-        self.header.area = inet_aton('0.0.0.0')
+        self.header.router = inet_aton(router_id)
+        self.header.area = inet_aton(area_id)
         self.header.check = 0
         self.header.auth_type = 0
         self.header.auth = struct.pack('B', 0)
 
         self.conn = OSPFSocket(mcast_group, local_ip, self)
         t = Thread(target=self.conn.receive_data)
+        t.start()
         h = Thread(target=self.send_hello)
         h.start()
-        t.start()
 
     def receive_data(self, data):
         ip_header = IPv4()
@@ -136,13 +141,14 @@ class OSPF:
                 
                 hello_packed = self.hello.pack()
                 self.header.length = 24 + len(hello_packed)
-                self.header.check = True
+                self.header.checkflag = True
                 header_packed = self.header.pack()
                 self.header.checksum = checksum(header_packed + hello_packed)
                 header_packed = self.header.pack()
                 packet = header_packed + hello_packed
                 self.conn.send_data(packet, mcast_group)
                 time.sleep(10)
+
 
 def checksum(msg):
     s = 0
@@ -154,19 +160,20 @@ def checksum(msg):
     s = ~s & 0xffff
     return s
 
+
 class Header:
     """Handles the OSPF header"""
 
     def __init__(self):
         """Initializes the header fields of an OSPF header"""
         
-        self.check = False
+        self.checkflag = False
         self.ver = 2
         self.mtype = 0
         self.length = 0
         self.router = 0
         self.area = 0
-        self.checksum = 0
+        self.check = 0
         self.auth_type = 0
         self.auth = 0
 
@@ -182,7 +189,7 @@ class Header:
         self.length = self.ospf_header[2]
         self.router = inet_ntoa(self.ospf_header[3])
         self.area = inet_ntoa(self.ospf_header[4])
-        self.checksum = self.ospf_header[5]
+        self.check = self.ospf_header[5]
         self.auth_type = self.ospf_header[6]
         auth = struct.unpack('!BBBBBBBB', self.ospf_header[7])
         self.auth = ''.join(map(str,auth))
@@ -190,16 +197,17 @@ class Header:
     def pack(self):
 
         head = struct.pack('!BBH4s4s', self.ver, self.mtype, self.length, self.router, self.area) 
-        if self.check:
-            self.checksum = 0
+        if self.checkflag:
+            self.check = 0
             auth = struct.pack('!H', self.auth_type)
-            self.check = False
+            self.checkflag = False
         else:
             auth = struct.pack('!H8s', self.auth_type, self.auth)
       
-        checksum = struct.pack('H', self.checksum)
+        check = struct.pack('H', self.check)
        
-        return head + checksum + auth
+        return head + check + auth
+
 
 class Hello:
     """Handles the OSPF Hello message"""
