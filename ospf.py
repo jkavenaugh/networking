@@ -16,8 +16,13 @@ import signal
 
 mcast_group = '224.0.0.5'
 local_ip = '172.16.50.208'
+subnet_mask = '255.255.255.0'
 area_id = '0.0.0.0'
 router_id = '4.4.4.4'
+router_priority = 0
+hello_interval = 10
+router_dead_interval = 40
+
 
 
 class OSPFSocket:
@@ -35,7 +40,7 @@ class OSPFSocket:
         self.ospf = ospf
 
     def receive_data(self):
-        """Returns data rercieved on the socket"""
+        """Returns data received on the socket"""
         while True:
             data = (self.sock.recvfrom(1500))
             self.ospf.receive_data(data[0])
@@ -91,11 +96,11 @@ class OSPF:
     def __init__(self):
 
         self.hello = Hello()
-        self.hello.net_mask = inet_aton('255.255.255.0')
-        self.hello.interval = 10
+        self.hello.net_mask = inet_aton(subnet_mask)
+        self.hello.interval = hello_interval
         self.hello.ebit = True
-        self.hello.priority = 0
-        self.hello.dead_int = 40
+        self.hello.priority = router_priority
+        self.hello.dead_int = router_dead_interval
         self.hello.des_router = inet_aton('0.0.0.0')
         self.hello.back_router = inet_aton('0.0.0.0')
         self.hello.neighbors = []
@@ -116,6 +121,7 @@ class OSPF:
         h = Thread(target=self.send_hello)
         h.start()
 
+
     def receive_data(self, data):
         ip_header = IPv4()
         ospf_header = Header()
@@ -125,12 +131,12 @@ class OSPF:
         if ip_header.saddr == local_ip: 
             return
 
-        ospf_header.unpack(data)
-               
+        if ospf_header.unpack(data, self) is False:
+            return
         if ospf_header.mtype == 1:
-           ospf_hello.unpack(data, self.header.length)
-           if ospf_header.router not in self.hello.neighbors:
-               self.hello.neighbors.append(ospf_header.router)
+            if ospf_hello.unpack(data, ospf_header.length, self) is True:
+                if ospf_header.router not in self.hello.neighbors:
+                    self.hello.neighbors.append(ospf_header.router)
 
     def send_hello(self):
             
@@ -143,7 +149,7 @@ class OSPF:
                 self.header.length = 24 + len(hello_packed)
                 self.header.checkflag = True
                 header_packed = self.header.pack()
-                self.header.checksum = checksum(header_packed + hello_packed)
+                self.header.check = checksum(header_packed + hello_packed)
                 header_packed = self.header.pack()
                 packet = header_packed + hello_packed
                 self.conn.send_data(packet, mcast_group)
@@ -177,23 +183,52 @@ class Header:
         self.auth_type = 0
         self.auth = 0
 
-    def unpack(self, data):
+    def unpack(self, data, ospf):
         """Takes data from a raw socket and unpacks the OSPF header from
            packed binary.
         """
 
         ospf_header = data[20:44]
-        self.ospf_header = struct.unpack('!BBH4s4sHH8s', ospf_header)
-        self.ver = self.ospf_header[0]
-        self.mtype = self.ospf_header[1]
-        self.length = self.ospf_header[2]
-        self.router = inet_ntoa(self.ospf_header[3])
-        self.area = inet_ntoa(self.ospf_header[4])
-        self.check = self.ospf_header[5]
-        self.auth_type = self.ospf_header[6]
-        auth = struct.unpack('!BBBBBBBB', self.ospf_header[7])
-        self.auth = ''.join(map(str,auth))
-     
+        ospf_header = struct.unpack('!BBH4s4sHH8s', ospf_header)
+        ver = ospf_header[0]
+        mtype = ospf_header[1]
+        length = ospf_header[2]
+        router = ospf_header[3]
+        area = ospf_header[4]
+
+        try:
+            inet_ntoa(ospf_header[3])
+            inet_ntoa(ospf_header[4])
+        except OSError:
+            return False
+
+        check = ospf_header[5]
+        auth_type = ospf_header[6]
+        auth = struct.unpack('!BBBBBBBB', ospf_header[7])
+        auth = ''.join(map(str, auth))
+
+        if ver != 2:
+            return False
+        elif mtype < 0 or mtype > 5:
+            return False
+        elif router == ospf.header.router:
+            return False
+        elif area != ospf.header.area:
+            return False
+        elif checksum(data[20:length+20]):
+            return False
+        elif auth_type:
+            return False
+
+        self.ver = ver
+        self.mtype = mtype
+        self.length = length
+        self.router = router
+        self.area = area
+        self.check = check
+        self.auth_type = auth_type
+        self.auth = auth
+
     def pack(self):
 
         head = struct.pack('!BBH4s4s', self.ver, self.mtype, self.length, self.router, self.area) 
@@ -217,7 +252,6 @@ class Hello:
         
         self.net_mask = 0
         self.interval = 0
-        self.options = 0
         self.mtbit = False
         self.ebit = False
         self.mcbit = False
@@ -232,6 +266,8 @@ class Hello:
         self.back_router = 0
         self.neighbors = []
         self.length = 0
+
+        self.set_options()
 
     def set_options(self):
         self.options = 0
@@ -253,29 +289,50 @@ class Hello:
             self.options += 128
 
 
-    def unpack(self, data, length):
+    def unpack(self, data, length, ospf):
         """Takes data from a raw socket and unpacks the OSPF Hello message
            from the packed binary
         """
 
         hello_header = data[44:64]
-        self.hello_header = struct.unpack('!4sHBB4s4s4s', hello_header)
-        self.net_mask = inet_ntoa(self.hello_header[0])
-        self.interval = self.hello_header[1]
-        self.options = self.hello_header[2]
-        self.priority = self.hello_header[3]
-        dead = struct.unpack('!BBBB', self.hello_header[4])
-        self.dead_int = int(''.join(map(str,dead)))
-        self.des_router = inet_ntoa(self.hello_header[5])
-        self.back_router = inet_ntoa(self.hello_header[6])
+        hello_header = struct.unpack('!4sHBBi4s4s', hello_header)
+        net_mask = hello_header[0]
+        interval = hello_header[1]
+        options = hello_header[2]
+        priority = hello_header[3]
+        dead_int = hello_header[4]
+        des_router = hello_header[5]
+        back_router = hello_header[6]
+
+        if net_mask != ospf.hello.net_mask:
+            return False
+        elif interval != ospf.hello.interval:
+            return False
+        elif dead_int != ospf.hello.dead_int:
+            return False
+        elif ((options  & 2) >> 1) != ospf.hello.ebit:
+            return False
+
+        self.net_mask = net_mask
+        self.interval = interval
+        self.options = options
+        self.priority = priority
+        self.dead_int = dead_int
+        self.des_router = des_router
+        self.back_router = back_router
 
         neighbor_length = length - 44
         neighbor_packed = data[64: 64 + neighbor_length]
         self.neighbors = []
 
         for pos in range(0, neighbor_length, 4):
-            neighbor = inet_ntoa(neighbor_packed[pos:pos+4])
-            self.neighbors.append(neighbor)
+            try:
+               inet_ntoa(neighbor_packed[pos:pos+4])
+               self.neighbors.append(neighbor_packed[pos:pos+4])
+            except OSError:
+               pass
+
+        return True
 
     def pack(self):
         self.set_options()        
@@ -283,7 +340,7 @@ class Hello:
         
         neighbors_packed = b''
         for neighbor in self.neighbors:
-            neighbors_packed = b''.join([neighbors_packed, inet_aton(neighbor)])
+            neighbors_packed = b''.join([neighbors_packed, neighbor])
         
         hello = hello_message + neighbors_packed
         return hello
